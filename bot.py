@@ -1,5 +1,5 @@
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
 # Токен вашего бота (вставь сюда свой токен)
 TOKEN = 'ВАШ_ТОКЕН'
@@ -11,27 +11,26 @@ knowledge_base = {
 }
 
 # Обработчик команды /start
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Привет! Я RenderGuru_bot, твой помощник по 3D-визуализации. Задай мне вопрос!")
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text("Привет! Я RenderGuru_bot, твой помощник по 3D-визуализации. Задай мне вопрос!")
 
 # Обработчик текстовых сообщений
-def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: CallbackContext):
     user_message = update.message.text.lower()
     response = knowledge_base.get(user_message, "Пока я не знаю ответа на этот вопрос. Попробуй задать его иначе!")
-    update.message.reply_text(response)
+    await update.message.reply_text(response)
 
 # Основная функция
 def main():
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    # Создаём приложение и передаём токен
+    application = Application.builder().token(TOKEN).build()
 
     # Регистрируем обработчики
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Запускаем бота
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
