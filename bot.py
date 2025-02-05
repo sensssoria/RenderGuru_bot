@@ -1,3 +1,4 @@
+import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import json
@@ -9,6 +10,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# Получаем токен из переменной окружения
+TOKEN = os.getenv('TOKEN', '7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c')
 
 # Загружаем базу знаний из JSON файла
 def load_knowledge_base():
@@ -120,16 +124,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Или попробуй переформулировать вопрос."
         )
 
-# Запуск бота
 async def main():
-    # Используйте свой токен
-    app = Application.builder().token('YOUR_BOT_TOKEN').build()
-    
-    # Регистрируем обработчики команд
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("learn", learn))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+    # Создаём приложение и передаём токен
+    application = Application.builder().token(TOKEN).build()
+
+    # Регистрируем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("learn", learn))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
     # Запускаем бота
-    await app.run_polling()
+    await application.run_polling()
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
