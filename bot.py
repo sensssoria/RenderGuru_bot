@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Получаем токен из переменной окружения
-TOKEN = os.getenv('TOKEN', '7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c')
+TOKEN = '7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c'
 
 # Загружаем базу знаний из JSON файла
 def load_knowledge_base():
