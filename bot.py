@@ -13,7 +13,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Получаем токен из переменной окружения
-TOKEN = '7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c'
+TOKEN = os.getenv('TOKEN')
+
+# Временная проверка загрузки токена
+if not TOKEN:
+    logger.error("Токен не загружен! Проверь переменные окружения.")
+    exit(1)
+else:
+    print(f"Токен загружен: {TOKEN[:5]}***")
 
 # Загружаем базу знаний из JSON файла
 def load_knowledge_base():
@@ -22,8 +29,8 @@ def load_knowledge_base():
         with open(kb_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {
-        "questions": {},  # Вопросы и ответы
-        "topics": {      # Темы и подтемы
+        "questions": {},
+        "topics": {
             "3ds_max": ["моделирование", "рендеринг", "материалы"],
             "corona": ["освещение", "материалы", "настройки"],
             "vray": ["освещение", "материалы", "настройки"]
@@ -73,21 +80,18 @@ async def learn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Загружаем базу знаний
     knowledge_base = load_knowledge_base()
     
-    # Получаем аргументы
     topic = context.args[0].lower()
     question = ' '.join(context.args[1:-1]).lower()
     answer = context.args[-1]
     
-    # Добавляем новое знание
     if question not in knowledge_base["questions"]:
         knowledge_base["questions"][question] = {
             "answer": answer,
             "topic": topic,
-            "rating": 0,  # Рейтинг ответа
-            "used_count": 0  # Счётчик использования
+            "rating": 0,
+            "used_count": 0
         }
         save_knowledge_base(knowledge_base)
         await update.message.reply_text(f"Спасибо! Я запомнил информацию о '{question}'")
@@ -99,21 +103,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text.lower()
     knowledge_base = load_knowledge_base()
     
-    # Ищем наиболее похожий вопрос в базе
     best_match = None
     best_ratio = 0
     
     for question in knowledge_base["questions"]:
-        # Простое сравнение по включению слов
         if any(word in question for word in user_message.split()):
             ratio = len(set(question.split()) & set(user_message.split())) / len(set(question.split()))
             if ratio > best_ratio:
                 best_ratio = ratio
                 best_match = question
     
-    if best_match and best_ratio > 0.3:  # Порог схожести
+    if best_match and best_ratio > 0.3:
         answer = knowledge_base["questions"][best_match]["answer"]
-        # Увеличиваем счётчик использования
         knowledge_base["questions"][best_match]["used_count"] += 1
         save_knowledge_base(knowledge_base)
         await update.message.reply_text(answer)
@@ -125,15 +126,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 def main():
-    # Создаём приложение
     app = Application.builder().token(TOKEN).build()
     
-    # Регистрируем обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("learn", learn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем бота
-    print("Starting bot...")
+    print("Запуск бота...")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
