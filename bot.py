@@ -10,6 +10,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Получаем токен из переменной окружения
 TOKEN = os.getenv('TOKEN', '7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c')
@@ -104,7 +105,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for question in knowledge_base["questions"]:
         # Простое сравнение по включению слов
-        # В будущем можно улучшить алгоритм поиска
         if any(word in question for word in user_message.split()):
             ratio = len(set(question.split()) & set(user_message.split())) / len(set(question.split()))
             if ratio > best_ratio:
@@ -124,19 +124,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Или попробуй переформулировать вопрос."
         )
 
-async def main():
-    # Создаём приложение и передаём токен
-    application = Application.builder().token(TOKEN).build()
-
+def main():
+    # Создаём приложение
+    app = Application.builder().token(TOKEN).build()
+    
     # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("learn", learn))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("learn", learn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
     # Запускаем бота
-    await application.run_polling()
-
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    print("Starting bot...")
+    app.run_polling()
