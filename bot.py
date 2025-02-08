@@ -5,7 +5,7 @@ from aiogram.types import Message
 from aiogram.utils import executor
 
 # Настройки бота
-TOKEN = "ТВОЙ_ТОКЕН_БОТА"
+TOKEN = "7867162876:AAGikAKxu1HIVXwQC8RfqRib2MPlDsrTk6c"
 DATABASE_URL = "postgresql://postgres:***@postgres.railway.internal:5432/railway"
 
 bot = Bot(token=TOKEN)
