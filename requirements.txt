@@ -1,4 +1,7 @@
 python-telegram-bot>=20.0
 asyncpg
 aiogram
-
+aiogram[fast]
+uvicorn
+fastapi
+psycopg2-binary
