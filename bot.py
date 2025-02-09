@@ -1,28 +1,28 @@
+import os
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
+from dotenv import load_dotenv
 
-TOKEN = "ТВОЙ_ТОКЕН"
+# Загружаем переменные окружения
+load_dotenv()
+TOKEN = os.getenv("TOKEN")
 
-# Включаем логирование (можно отключить, если не нужно)
+# Проверяем, загружен ли токен
+if not TOKEN:
+    print("ОШИБКА: Токен не найден! Проверь переменные окружения в Railway!")
+    exit(1)
+
+# Логирование
 logging.basicConfig(level=logging.INFO)
 
-# Создаем экземпляры бота и диспетчера
+# Создание бота и диспетчера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Пример обработки команды /start
+# Проверка команды /start
 @dp.message(Command("start"))
 async def start_handler(message: Message):
-    await message.answer("Привет! Я твой Telegram-бот!")
-
-# Главная асинхронная функция
-async def main():
-    await dp.start_polling(bot)
-
-# Запускаем бота
-if __name__ == "__main__":
-    asyncio.run(main())
-
+    await message.answer("Привет! Я т
