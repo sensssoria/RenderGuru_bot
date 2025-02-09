@@ -1,28 +1,44 @@
 import os
 import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
-from dotenv import load_dotenv
 
-# Загружаем переменные окружения
-load_dotenv()
+# Если .env не подключался раньше – устанавливай python-dotenv в requirements, а потом импортируй и подгружай:
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("У тебя не установлен python-dotenv, пропускаем этот шаг...")
+
+# Читаем токен из переменных окружения
 TOKEN = os.getenv("TOKEN")
 
-# Проверяем, загружен ли токен
+# Проверяем, что токен нашёлся
 if not TOKEN:
     print("ОШИБКА: Токен не найден! Проверь переменные окружения в Railway!")
     exit(1)
 
-# Логирование
+# Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
-# Создание бота и диспетчера
+# Создаём экземпляры бота и диспетчера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Проверка команды /start
+# Обработчик команды /start
 @dp.message(Command("start"))
-async def start_handler(message: Message):
-    await message.answer("Привет! Я т
+async def start_cmd(message: Message):
+    await message.answer("Привет! Я бот на aiogram 3.x. Всё работает!")
+
+# Главная асинхронная функция
+async def main():
+    # Выведем часть токена для проверки, что он не пуст
+    print(f"✅ Бот запускается с токеном: {TOKEN[:10]}... (дальше скрыто)")
+    await dp.start_polling(bot)
+
+# Запуск бота
+if __name__ == "__main__":
+    asyncio.run(main())
