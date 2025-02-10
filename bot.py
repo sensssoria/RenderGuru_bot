@@ -10,8 +10,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     CallbackQuery
 )
-from aiogram.filters import Command
-from aiogram.filters import Text
+from aiogram.filters import Command, Text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
@@ -38,7 +37,6 @@ if not DATABASE_URL:
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БД ============
 
@@ -69,8 +67,7 @@ async def init_db():
     """)
     await conn.close()
 
-
-# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БОТ-АДМИНАМИ ============
+# ============ ПРОВЕРКА ПРАВ АДМИНА ============
 
 async def is_superadmin(user_id: int) -> bool:
     conn = await asyncpg.connect(DATABASE_URL)
@@ -87,17 +84,16 @@ async def is_admin(user_id: int) -> bool:
     await conn.close()
     return bool(row)
 
-
 # ============ МЕНЮ ============
 
 def main_menu():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton("Спросить"))
-    kb.add(KeyboardButton("Учить"))
-    kb.add(KeyboardButton("Помощь"))
-    kb.add(KeyboardButton("Администрирование"))
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
+        [KeyboardButton("Спросить")],
+        [KeyboardButton("Учить")],
+        [KeyboardButton("Помощь")],
+        [KeyboardButton("Администрирование")]
+    ])
     return kb
-
 
 # ============ ОБРАБОТЧИК /start ============
 
@@ -108,7 +104,6 @@ async def start_cmd(message: Message):
         "Выбирай действие на клавиатуре снизу или пиши вопросы в чат!",
         reply_markup=main_menu()
     )
-
 
 # ============ ОБРАБОТКА КНОПОК ============
 
@@ -124,11 +119,9 @@ async def help_cmd(message: Message):
         " - /set_public_learn on/off — открыть/закрыть обучение всем\n"
     )
 
-
 @dp.message(Text("Спросить"))
 async def ask_cmd(message: Message):
     await message.answer("Задавай вопрос! Я попробую найти ответ в базе.")
-
 
 @dp.message(Text("Учить"))
 async def teach_cmd(message: Message, state: FSMContext):
@@ -139,13 +132,11 @@ async def teach_cmd(message: Message, state: FSMContext):
     await message.answer("Ок, введи вопрос, который хочешь добавить/изменить.")
     await state.set_state(LearnStates.WAITING_QUESTION)
 
-
 # ============ FSM ДЛЯ ОБУЧЕНИЯ ============
 
 class LearnStates(StatesGroup):
     WAITING_QUESTION = State()
     WAITING_ANSWER = State()
-
 
 @dp.message(LearnStates.WAITING_QUESTION)
 async def fsm_question(message: Message, state: FSMContext):
@@ -153,7 +144,6 @@ async def fsm_question(message: Message, state: FSMContext):
     await state.update_data(question=question)
     await message.answer("Введи ответ на этот вопрос:")
     await state.set_state(LearnStates.WAITING_ANSWER)
-
 
 @dp.message(LearnStates.WAITING_ANSWER)
 async def fsm_answer(message: Message, state: FSMContext):
@@ -173,36 +163,6 @@ async def fsm_answer(message: Message, state: FSMContext):
 
     await message.answer(f"Сохранено!\nВопрос: {question}\nОтвет: {answer}")
     await state.clear()
-
-
-# ============ ХЕНДЛЕР ВСЕХ ПРОЧИХ СООБЩЕНИЙ (ПОИСК) ============
-
-@dp.message()
-async def text_query(message: Message):
-    user_text = message.text.strip()
-    if not user_text:
-        return
-
-    tokens = user_text.lower().split()
-    tsquery_str = " & ".join(tokens)
-
-    conn = await asyncpg.connect(DATABASE_URL)
-    rows = await conn.fetch(f"""
-        SELECT question, answer,
-               ts_rank_cd(question_tsv, to_tsquery('simple', $1)) as rank
-        FROM knowledge_base
-        WHERE question_tsv @@ to_tsquery('simple', $1)
-        ORDER BY rank DESC
-        LIMIT 5
-    """, tsquery_str)
-    await conn.close()
-
-    if not rows:
-        await message.answer("(Заглушка) GPT недоступен, попробуйте позже.")
-    else:
-        best_match = rows[0]
-        await message.answer(f"Из базы:\n{best_match['answer']}")
-
 
 # ============ ЗАПУСК БОТА ============
 
