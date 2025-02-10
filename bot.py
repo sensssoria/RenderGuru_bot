@@ -1,152 +1,134 @@
 import os
 import asyncio
-import logging
 import asyncpg
+import logging
+import openai
+import numpy as np
 from dotenv import load_dotenv
-from transformers import pipeline
-import torch
-
 from aiogram import Bot, Dispatcher
-from aiogram.types import (
-    Message, 
-    ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
-from aiogram.filters import Command
-from aiogram.filters.text import Text
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import Command, Text
+from sentence_transformers import SentenceTransformer
 
 # ✅ Загружаем переменные окружения
 load_dotenv()
-
-# ✅ Получаем переменные окружения
 TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not TOKEN or not DATABASE_URL:
-    raise ValueError("❌ Ошибка: API_TOKEN или DATABASE_URL не установлены в переменных окружения!")
+if not TOKEN or not DATABASE_URL or not OPENAI_API_KEY:
+    raise ValueError("❌ Ошибка: API_TOKEN, DATABASE_URL или OPENAI_API_KEY не установлены!")
 
+# ✅ Инициализация бота
 bot = Bot(token=TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
-# ✅ NLP-модель для семантического поиска
-device = "cuda" if torch.cuda.is_available() else "cpu"
-nlp_model = pipeline("feature-extraction", model="sentence-transformers/all-MiniLM-L6-v2", device=0 if device == "cuda" else -1)
+# ✅ NLP-модель для поиска по смыслу
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БД ============
 
 async def init_db():
-    """Создание таблиц, если их нет"""
+    """Создание таблиц в БД"""
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS bot_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS bot_admins (
-            user_id BIGINT PRIMARY KEY,
-            role TEXT NOT NULL DEFAULT 'admin'
-        );
-
         CREATE TABLE IF NOT EXISTS knowledge_base (
             id SERIAL PRIMARY KEY,
             question TEXT UNIQUE NOT NULL,
-            question_tsv tsvector,
-            answer TEXT NOT NULL
+            answer TEXT NOT NULL,
+            embedding VECTOR(384)
         );
 
-        CREATE INDEX IF NOT EXISTS question_tsv_idx ON knowledge_base USING GIN (question_tsv);
+        CREATE TABLE IF NOT EXISTS bot_admins (
+            user_id BIGINT PRIMARY KEY
+        );
     """)
     await conn.close()
 
-async def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь админом"""
+async def search_in_db(question: str):
+    """Поиск ответа в БД по смыслу"""
+    query_embedding = model.encode(question).tolist()
     conn = await asyncpg.connect(DATABASE_URL)
-    result = await conn.fetchval("SELECT COUNT(*) FROM bot_admins WHERE user_id = $1", user_id)
+    rows = await conn.fetch("SELECT answer, embedding FROM knowledge_base")
     await conn.close()
-    return result > 0
 
-# ============ МЕНЮ ============
+    if not rows:
+        return None
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Спросить"), KeyboardButton(text="Учить")],
-            [KeyboardButton(text="Помощь"), KeyboardButton(text="Администрирование")],
-        ],
-        resize_keyboard=True
+    best_match = None
+    best_score = -1
+
+    for row in rows:
+        stored_embedding = np.array(row["embedding"])
+        score = np.dot(query_embedding, stored_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(stored_embedding))
+
+        if score > best_score:
+            best_score = score
+            best_match = row["answer"]
+
+    return best_match if best_score > 0.75 else None  # Порог уверенности
+
+async def save_to_db(question: str, answer: str):
+    """Сохранение нового знания в БД"""
+    embedding = model.encode(question).tolist()
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute(
+        "INSERT INTO knowledge_base (question, answer, embedding) VALUES ($1, $2, $3) ON CONFLICT (question) DO NOTHING",
+        question, answer, embedding
     )
+    await conn.close()
+
+async def get_openai_answer(question: str):
+    """Получение ответа от OpenAI, если в БД нет данных"""
+    openai.api_key = OPENAI_API_KEY
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": question}],
+        temperature=0.7
+    )
+    return response["choices"][0]["message"]["content"]
 
 # ============ ОБРАБОТКА КОМАНД ============
 
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     await message.answer(
-        "Привет! Я бот с продвинутым поиском и обучением.\n"
-        "Выбирай действие на клавиатуре снизу или пиши вопросы в чат!",
-        reply_markup=main_menu()
+        "Привет! Я бот-ассистент для 3D-визуализаторов. Спроси что угодно!",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="Спросить"), KeyboardButton(text="Учить")],
+                [KeyboardButton(text="Помощь"), KeyboardButton(text="Администрирование")],
+            ],
+            resize_keyboard=True
+        )
     )
 
-@dp.message(Text("Помощь"))
-async def help_cmd(message: Message):
-    await message.answer(
-        "🔹 **Доступные функции:**\n"
-        " - Просто напиши вопрос, я найду ответ в БД 📚\n"
-        " - Кнопка 'Учить' (только для админа, если public_learn=off) 🧑‍🏫\n"
-        " - Кнопка 'Администрирование' (управление админами, настройками) ⚙️\n"
-        " - `/add_admin <id>` — Добавить админа 👤\n"
-        " - `/remove_admin <id>` — Удалить админа ❌\n"
-        " - `/set_public_learn on/off` — открыть/закрыть обучение всем 🔧"
-    )
+@dp.message(Text("Спросить"))
+async def ask_cmd(message: Message):
+    question = message.text
+    answer = await search_in_db(question)
 
-# ============ ОБРАБОТКА КНОПОК ============
+    if answer:
+        await message.answer(answer)
+    else:
+        ai_answer = await get_openai_answer(question)
+        await message.answer(ai_answer)
+        await save_to_db(question, ai_answer)
 
-@dp.message(Text("Администрирование"))
-async def admin_panel(message: Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет прав доступа к администрированию.")
-        return
+@dp.message(Text("Учить"))
+async def learn_cmd(message: Message):
+    await message.answer("Введите вопрос:")
+    await bot.register_next_step_handler(message, get_question)
 
-    await message.answer(
-        "🔧 Вы в разделе администрирования.\n"
-        "Доступные команды:\n"
-        " - `/add_admin <id>` — Добавить админа\n"
-        " - `/remove_admin <id>` — Удалить админа\n"
-        " - `/set_public_learn on/off` — Настроить обучение"
-    )
+async def get_question(message: Message):
+    question = message.text
+    await message.answer("Введите ответ:")
+    await bot.register_next_step_handler(message, get_answer, question)
 
-@dp.message(Command("add_admin"))
-async def add_admin(message: Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет прав на добавление администраторов.")
-        return
-
-    try:
-        user_id = int(message.text.split()[1])
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("INSERT INTO bot_admins (user_id) VALUES ($1) ON CONFLICT DO NOTHING", user_id)
-        await conn.close()
-        await message.answer(f"✅ Пользователь {user_id} добавлен в администраторы.")
-    except Exception:
-        await message.answer("⚠️ Используйте: `/add_admin <id>`")
-
-@dp.message(Command("remove_admin"))
-async def remove_admin(message: Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет прав на удаление администраторов.")
-        return
-
-    try:
-        user_id = int(message.text.split()[1])
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("DELETE FROM bot_admins WHERE user_id = $1", user_id)
-        await conn.close()
-        await message.answer(f"✅ Пользователь {user_id} удалён из администраторов.")
-    except Exception:
-        await message.answer("⚠️ Используйте: `/remove_admin <id>`")
+async def get_answer(message: Message, question):
+    answer = message.text
+    await save_to_db(question, answer)
+    await message.answer("✅ Новый ответ сохранён!")
 
 # ============ ЗАПУСК БОТА ============
 
