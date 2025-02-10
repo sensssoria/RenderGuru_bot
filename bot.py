@@ -11,7 +11,7 @@ from aiogram.types import (
     CallbackQuery
 )
 from aiogram.filters import Command
-from aiogram.filters.text import Text  # Исправлен импорт Text
+from aiogram.filters import Text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
