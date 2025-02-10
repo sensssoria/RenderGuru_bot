@@ -4,3 +4,4 @@ python-dotenv
 asyncpg
 psycopg2-binary
 openai==0.27.0
+
