@@ -70,11 +70,16 @@ async def init_db():
 
 # ============ МЕНЮ ============
 
-def main_menu():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("Спросить"), KeyboardButton("Учить")],
-        [KeyboardButton("Помощь"), KeyboardButton("Администрирование")]
-    ], resize_keyboard=True)
+
+def main_menu() -> ReplyKeyboardMarkup:
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Спросить"), KeyboardButton(text="Учить")],
+            [KeyboardButton(text="Помощь"), KeyboardButton(text="Администрирование")],
+        ],
+        resize_keyboard=True
+    )
+    return kb
 
 # ============ ОБРАБОТЧИК /start ============
 
