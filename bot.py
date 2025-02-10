@@ -1,8 +1,8 @@
 import os
 import asyncio
 import logging
-
 import asyncpg
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     Message, 
@@ -10,12 +10,14 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     CallbackQuery
 )
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
+from aiogram.filters.text import Text  # Исправлен импорт Text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+# Если у тебя есть .env - подключим dotenv
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -37,68 +39,39 @@ if not DATABASE_URL:
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ============ АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ТАБЛИЦ ============
+
+# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БД ============
+
 async def init_db():
     """
-    Создаёт необходимые таблицы, если их нет.
+    Автоматическое создание таблиц, если их нет.
     """
-    queries = [
-        """
-        CREATE TABLE IF NOT EXISTS bot_admins (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL UNIQUE,
-            role TEXT NOT NULL DEFAULT 'admin'
-        );
-        """,
-        """
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        """,
-        """
+
+        CREATE TABLE IF NOT EXISTS bot_admins (
+            user_id BIGINT PRIMARY KEY,
+            role TEXT NOT NULL DEFAULT 'admin'
+        );
+
         CREATE TABLE IF NOT EXISTS knowledge_base (
-            id BIGSERIAL PRIMARY KEY,
-            question TEXT NOT NULL UNIQUE,
-            question_tsv tsvector NOT NULL,
+            id SERIAL PRIMARY KEY,
+            question TEXT UNIQUE NOT NULL,
+            question_tsv tsvector,
             answer TEXT NOT NULL
         );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS user_queries (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            query TEXT NOT NULL,
-            response TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT now()
-        );
-        """
-    ]
 
-    conn = await asyncpg.connect(DATABASE_URL)
-    for query in queries:
-        await conn.execute(query)
+        CREATE INDEX IF NOT EXISTS question_tsv_idx ON knowledge_base USING GIN (question_tsv);
+    """)
     await conn.close()
 
-# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С bot_settings (public_learn) ============
-async def is_public_learn_enabled() -> bool:
-    conn = await asyncpg.connect(DATABASE_URL)
-    row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key='public_learn'")
-    await conn.close()
-    if not row:
-        return False  # По умолчанию закрыто
-    return (row["value"] == "true")
 
-async def set_public_learn(new_value: bool):
-    conn = await asyncpg.connect(DATABASE_URL)
-    val_str = "true" if new_value else "false"
-    await conn.execute("""
-        INSERT INTO bot_settings(key, value) VALUES ('public_learn', $1)
-        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value
-    """, val_str)
-    await conn.close()
+# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БОТ-АДМИНАМИ ============
 
-# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С bot_admins ============
 async def is_superadmin(user_id: int) -> bool:
     conn = await asyncpg.connect(DATABASE_URL)
     row = await conn.fetchrow(
@@ -114,26 +87,128 @@ async def is_admin(user_id: int) -> bool:
     await conn.close()
     return bool(row)
 
-async def add_admin(user_id: int, role: str = "admin"):
+
+# ============ МЕНЮ ============
+
+def main_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("Спросить"))
+    kb.add(KeyboardButton("Учить"))
+    kb.add(KeyboardButton("Помощь"))
+    kb.add(KeyboardButton("Администрирование"))
+    return kb
+
+
+# ============ ОБРАБОТЧИК /start ============
+
+@dp.message(Command("start"))
+async def start_cmd(message: Message):
+    await message.answer(
+        "Привет! Я бот с продвинутым поиском и обучением.\n"
+        "Выбирай действие на клавиатуре снизу или пиши вопросы в чат!",
+        reply_markup=main_menu()
+    )
+
+
+# ============ ОБРАБОТКА КНОПОК ============
+
+@dp.message(Text("Помощь"))
+async def help_cmd(message: Message):
+    await message.answer(
+        "Доступные функции:\n"
+        " - Просто напиши вопрос, я найду ответ в БД (FTS)\n"
+        " - Кнопка 'Учить' (только для админа, если public_learn=off)\n"
+        " - Кнопка 'Администрирование' (управление админами, настройками)\n"
+        " - /add_admin <id>  — Добавить админа\n"
+        " - /remove_admin <id> — Удалить админа\n"
+        " - /set_public_learn on/off — открыть/закрыть обучение всем\n"
+    )
+
+
+@dp.message(Text("Спросить"))
+async def ask_cmd(message: Message):
+    await message.answer("Задавай вопрос! Я попробую найти ответ в базе.")
+
+
+@dp.message(Text("Учить"))
+async def teach_cmd(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("У вас нет прав для обучения бота.")
+        return
+
+    await message.answer("Ок, введи вопрос, который хочешь добавить/изменить.")
+    await state.set_state(LearnStates.WAITING_QUESTION)
+
+
+# ============ FSM ДЛЯ ОБУЧЕНИЯ ============
+
+class LearnStates(StatesGroup):
+    WAITING_QUESTION = State()
+    WAITING_ANSWER = State()
+
+
+@dp.message(LearnStates.WAITING_QUESTION)
+async def fsm_question(message: Message, state: FSMContext):
+    question = message.text.strip()
+    await state.update_data(question=question)
+    await message.answer("Введи ответ на этот вопрос:")
+    await state.set_state(LearnStates.WAITING_ANSWER)
+
+
+@dp.message(LearnStates.WAITING_ANSWER)
+async def fsm_answer(message: Message, state: FSMContext):
+    data = await state.get_data()
+    question = data["question"]
+    answer = message.text.strip()
+
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
-        INSERT INTO bot_admins(user_id, role) VALUES ($1, $2)
-        ON CONFLICT (user_id) DO NOTHING
-    """, user_id, role)
+        INSERT INTO knowledge_base (question, question_tsv, answer)
+        VALUES ($1, to_tsvector('simple', $1), $2)
+        ON CONFLICT (question) DO UPDATE
+        SET answer = EXCLUDED.answer,
+            question_tsv = to_tsvector('simple', EXCLUDED.question)
+    """, question, answer)
     await conn.close()
 
-async def remove_admin(user_id: int):
+    await message.answer(f"Сохранено!\nВопрос: {question}\nОтвет: {answer}")
+    await state.clear()
+
+
+# ============ ХЕНДЛЕР ВСЕХ ПРОЧИХ СООБЩЕНИЙ (ПОИСК) ============
+
+@dp.message()
+async def text_query(message: Message):
+    user_text = message.text.strip()
+    if not user_text:
+        return
+
+    tokens = user_text.lower().split()
+    tsquery_str = " & ".join(tokens)
+
     conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("DELETE FROM bot_admins WHERE user_id=$1", user_id)
+    rows = await conn.fetch(f"""
+        SELECT question, answer,
+               ts_rank_cd(question_tsv, to_tsquery('simple', $1)) as rank
+        FROM knowledge_base
+        WHERE question_tsv @@ to_tsquery('simple', $1)
+        ORDER BY rank DESC
+        LIMIT 5
+    """, tsquery_str)
     await conn.close()
 
-# ============ ОСТАЛЬНЫЕ ФУНКЦИИ, FSM И ЗАПУСК БОТА (без изменений) ============
-# Код оставлен без изменений, за исключением уже существующих функций
-# инициализации и обработки данных, добавленных ранее.
+    if not rows:
+        await message.answer("(Заглушка) GPT недоступен, попробуйте позже.")
+    else:
+        best_match = rows[0]
+        await message.answer(f"Из базы:\n{best_match['answer']}")
+
+
+# ============ ЗАПУСК БОТА ============
 
 async def main():
     print("Запуск бота...")
-    await init_db()  # Автоматическое создание таблиц
+    await init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
