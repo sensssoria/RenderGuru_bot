@@ -7,8 +7,8 @@ from typing import Optional
 from transformers import pipeline
 
 # Настройки бота
-API_TOKEN = "ВАШ_ТОКЕН_БОТА"
-DATABASE_URL = "ВАШ_АДРЕС_БАЗЫ_ДАННЫХ"
+API_TOKEN = "7867162876:AAEKMayzO8pkwRzYvkNrlOIMbNYpcFKa45A"
+DATABASE_URL = "postgresql://postgres:csTBKANWoCIVUGqlzGKWXgrNWbVfqksL@autorack.proxy.rlwy.net:30085/railway"
 
 # NLP модель для анализа текста
 nlp_model = pipeline("feature-extraction", model="sentence-transformers/all-mpnet-base-v2")
