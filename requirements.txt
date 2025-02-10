@@ -5,3 +5,4 @@ asyncpg
 psycopg2-binary
 openai==0.27.0
 transformers==4.33.2
+torch==2.0.0
