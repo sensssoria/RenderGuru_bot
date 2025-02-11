@@ -1,131 +1,136 @@
 import os
 import asyncio
-import asyncpg
 import openai
+import logging
+import sqlite3
 import numpy as np
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sentence_transformers import SentenceTransformer
 
-# ✅ Загружаем API-ключи и БД из переменных окружения
-TOKEN = os.getenv("API_TOKEN")  # Токен Telegram-бота
-DATABASE_URL = os.getenv("DATABASE_URL")  # Подключение к PostgreSQL
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # API-ключ OpenAI
+# Загрузка API-ключей
+API_TOKEN = os.getenv("API_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL", "bot_data.db")
 
-if not TOKEN or not DATABASE_URL or not OPENAI_API_KEY:
-    raise ValueError("❌ Ошибка: API_TOKEN, DATABASE_URL или OPENAI_API_KEY не установлены!")
+if not API_TOKEN or not OPENAI_API_KEY:
+    raise ValueError("❌ Ошибка: API_TOKEN и OPENAI_API_KEY должны быть заданы в Railway Variables!")
 
-# ✅ Инициализируем бота
-bot = Bot(token=TOKEN)
+# Настройка бота
+bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
+openai.api_key = OPENAI_API_KEY
 
-# ✅ NLP-модель для поиска по смыслу
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# NLP-модель для смыслового сравнения
+model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
-# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С БД ============
+# Фильтр тематики 3D
+allowed_keywords = ["3D", "рендер", "визуализация", "моделирование", "текстуры", "свет", "сцена", "материалы"]
 
-async def init_db():
-    """Создание таблиц в БД"""
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_base (
-            id SERIAL PRIMARY KEY,
-            question TEXT UNIQUE NOT NULL,
-            answer TEXT NOT NULL,
-            embedding VECTOR(384)
-        );
+async def is_relevant_question(question: str):
+    """Проверяет, относится ли вопрос к 3D"""
+    return any(word.lower() in question.lower() for word in allowed_keywords)
 
-        CREATE TABLE IF NOT EXISTS bot_admins (
-            user_id BIGINT PRIMARY KEY
-        );
-    """)
-    await conn.close()
+# Инициализация базы с векторным поиском
+def init_db():
+    conn = sqlite3.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question TEXT UNIQUE,
+            embedding BLOB,
+            answer TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 async def search_in_db(question: str):
-    """Поиск ответа в БД по смыслу"""
-    query_embedding = model.encode(question).tolist()
-    conn = await asyncpg.connect(DATABASE_URL)
-    rows = await conn.fetch("SELECT answer, embedding FROM knowledge_base")
-    await conn.close()
-
-    if not rows:
-        return None
+    """Поиск по смыслу (векторное сравнение)"""
+    question_embedding = model.encode(question)
+    conn = sqlite3.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    cursor.execute("SELECT question, embedding, answer FROM questions")
+    rows = cursor.fetchall()
+    conn.close()
 
     best_match = None
     best_score = -1
 
-    for row in rows:
-        stored_embedding = np.array(row["embedding"])
-        score = np.dot(query_embedding, stored_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(stored_embedding))
+    for stored_question, embedding_blob, answer in rows:
+        stored_embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+        score = np.dot(question_embedding, stored_embedding) / (np.linalg.norm(question_embedding) * np.linalg.norm(stored_embedding))
 
-        if score > 0.75:  # Порог уверенности
-            best_match = row["answer"]
+        if score > best_score:
+            best_score = score
+            best_match = (stored_question, answer)
 
-    return best_match
+    if best_match and best_score > 0.85:  # Минимальный порог похожести
+        return best_match[1]
+    return None
 
 async def save_to_db(question: str, answer: str):
-    """Сохранение нового знания в БД"""
-    embedding = model.encode(question).tolist()
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute(
-        "INSERT INTO knowledge_base (question, answer, embedding) VALUES ($1, $2, $3) ON CONFLICT (question) DO NOTHING",
-        question, answer, embedding
-    )
-    await conn.close()
-
-async def get_available_gpt_model():
-    """Проверяем, какие модели OpenAI доступны"""
-    openai.api_key = OPENAI_API_KEY
-    try:
-        response = openai.Model.list()
-        available_models = [model["id"] for model in response["data"]]
-        print(f"✅ Доступные модели OpenAI: {available_models}")
-
-        if "gpt-4o" in available_models:
-            return "gpt-4o"
-        elif "gpt-4" in available_models:
-            return "gpt-4"
-        elif "gpt-3.5-turbo" in available_models:
-            return "gpt-3.5-turbo"
-        else:
-            print("⚠ OpenAI не предоставляет доступные модели.")
-            return None
-    except Exception as e:
-        print(f"⚠ Ошибка при получении списка моделей: {e}")
-        return None
+    """Сохранение нового вопроса с его вектором"""
+    question_embedding = model.encode(question).astype(np.float32).tobytes()
+    conn = sqlite3.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO questions (question, embedding, answer) VALUES (?, ?, ?)", (question, question_embedding, answer))
+    conn.commit()
+    conn.close()
 
 async def get_openai_answer(question: str):
-    """Получение ответа от OpenAI, если в БД нет данных"""
-    openai.api_key = OPENAI_API_KEY
-    model_name = await get_available_gpt_model()
-    
-    if not model_name:
-        return "⚠ OpenAI API недоступен или нет подходящих моделей."
+    """Получение ответа от OpenAI"""
+    if not await is_relevant_question(question):
+        return "⚠ Я отвечаю только на вопросы по 3D-визуализации."
 
     try:
         response = openai.ChatCompletion.create(
-            model=model_name,
-            messages=[{"role": "user", "content": question}],
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Ты эксперт по 3D-визуализации, моделированию и рендерингу. Отвечай только на вопросы по этим темам."},
+                {"role": "user", "content": question}
+            ],
             temperature=0.7
         )
         return response["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"⚠ Ошибка при запросе к OpenAI: {e}"
+        return f"⚠ Ошибка OpenAI: {e}"
 
-# ============ ОБРАБОТКА КОМАНД ============
-
+# Обработчик /start
 @dp.message(Command("start"))
-async def start_cmd(message: Message):
-    await message.answer("Привет! Я RenderGuru. Задай мне любой вопрос по 3D-визуализации!")
+async def start_handler(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Спросить", callback_data="ask")],
+            [InlineKeyboardButton(text="Учить", callback_data="learn")],
+            [InlineKeyboardButton(text="Помощь", callback_data="help")]
+        ]
+    )
+    await message.answer("👋 Привет! Я RenderGuru. Задай мне любой вопрос по 3D-визуализации!", reply_markup=keyboard)
 
-@dp.message(Command("ask"))
-async def ask_cmd(message: Message):
-    question = message.text.replace("/ask", "").strip()
+# Обработчик кнопок
+@dp.callback_query()
+async def callback_handler(callback: types.CallbackQuery):
+    if callback.data == "ask":
+        await callback.message.answer("Введите ваш вопрос:")
+    elif callback.data == "learn":
+        await callback.message.answer("Вы можете научить меня новому! Просто напишите вопрос и ответ.")
+    elif callback.data == "help":
+        await callback.message.answer("Я - бот по 3D-визуализации. Задайте мне вопрос или используйте кнопки.")
+    await callback.answer()
+
+# Обработчик текстовых сообщений
+@dp.message()
+async def handle_text(message: types.Message):
+    """Обрабатывает текстовые сообщения"""
+    question = message.text.strip()
     if not question:
-        await message.answer("❌ Вопрос не может быть пустым. Используй `/ask Твой вопрос`.")
         return
 
+    # Поиск по смыслу в базе
     answer = await search_in_db(question)
     if answer:
         await message.answer(answer)
@@ -134,31 +139,13 @@ async def ask_cmd(message: Message):
         await message.answer(ai_answer)
         await save_to_db(question, ai_answer)
 
-@dp.message(Command("learn"))
-async def learn_cmd(message: Message):
-    await message.answer("Введите вопрос:")
-    await bot.register_next_step_handler(message, get_question)
-
-async def get_question(message: Message):
-    question = message.text
-    await message.answer("Введите ответ:")
-    await bot.register_next_step_handler(message, get_answer, question)
-
-async def get_answer(message: Message, question):
-    answer = message.text
-    await save_to_db(question, answer)
-    await message.answer("✅ Новый ответ сохранён!")
-
-# ============ ЗАПУСК БОТА НА POLLING ============
-
+# Запуск Polling
 async def main():
+    """Запуск бота"""
+    logging.basicConfig(level=logging.INFO)
     print("🚀 Бот RenderGuru запущен...")
-    await init_db()
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)  # ✅ Сбрасываем Webhook, если был
-        await dp.start_polling(bot)
-    except Exception as e:
-        print(f"⚠ Ошибка запуска: {e}")
+    init_db()  # Инициализация базы
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
