@@ -10,3 +10,4 @@ numpy<2
 sentence-transformers==2.2.2
 huggingface_hub==0.16.4
 redis[asyncio]
+sqlalchemy[asyncio]
