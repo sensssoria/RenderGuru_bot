@@ -50,7 +50,7 @@ async def search_in_db(question: str):
     await conn.close()
 
     if not rows:
-        return None  # ✅ Исправленный отступ, теперь код работает
+        return None
 
     best_match = None
     best_score = -1
@@ -74,18 +74,44 @@ async def save_to_db(question: str, answer: str):
     )
     await conn.close()
 
+async def get_available_gpt_model():
+    """Проверяем, какие модели OpenAI доступны"""
+    openai.api_key = OPENAI_API_KEY
+    try:
+        response = openai.Model.list()
+        available_models = [model["id"] for model in response["data"]]
+        print(f"✅ Доступные модели OpenAI: {available_models}")
+
+        if "gpt-4o" in available_models:
+            return "gpt-4o"
+        elif "gpt-4" in available_models:
+            return "gpt-4"
+        elif "gpt-3.5-turbo" in available_models:
+            return "gpt-3.5-turbo"
+        else:
+            print("⚠ OpenAI не предоставляет доступные модели.")
+            return None
+    except Exception as e:
+        print(f"⚠ Ошибка при получении списка моделей: {e}")
+        return None
+
 async def get_openai_answer(question: str):
     """Получение ответа от OpenAI, если в БД нет данных"""
     openai.api_key = OPENAI_API_KEY
+    model_name = await get_available_gpt_model()
+    
+    if not model_name:
+        return "⚠ OpenAI API недоступен или нет подходящих моделей."
+
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o",
+            model=model_name,
             messages=[{"role": "user", "content": question}],
             temperature=0.7
         )
         return response["choices"][0]["message"]["content"]
     except Exception as e:
-        return "⚠ Ошибка при запросе к OpenAI."
+        return f"⚠ Ошибка при запросе к OpenAI: {e}"
 
 # ============ ОБРАБОТКА КОМАНД ============
 
@@ -123,12 +149,16 @@ async def get_answer(message: Message, question):
     await save_to_db(question, answer)
     await message.answer("✅ Новый ответ сохранён!")
 
-# ============ ЗАПУСК БОТА ============
+# ============ ЗАПУСК БОТА НА POLLING ============
 
 async def main():
     print("🚀 Бот RenderGuru запущен...")
     await init_db()
-    await dp.start_polling(bot)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)  # ✅ Сбрасываем Webhook, если был
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"⚠ Ошибка запуска: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
