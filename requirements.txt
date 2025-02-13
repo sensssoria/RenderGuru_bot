@@ -11,3 +11,4 @@ huggingface_hub==0.16.4
 redis[asyncio]
 sqlalchemy[asyncio]
 cachetools
+pgvector
