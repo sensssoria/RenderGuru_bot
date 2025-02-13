@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, AsyncGenerator, List
 import numpy as np
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter  # Заменено: импорт BaseFilter вместо BoundFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -19,7 +19,6 @@ from openai.error import OpenAIError
 from cachetools import TTLCache
 from pgvector.sqlalchemy import Vector
 from redis import asyncio as aioredis
-from aiogram.dispatcher.filters import BoundFilter
 
 # ---------------------------------------------------------------------
 # Настройка логирования
@@ -67,6 +66,21 @@ class Admins(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, unique=True, nullable=False)
     added_at = Column(DateTime, server_default=func.now())
+
+# ---------------------------------------------------------------------
+# Асинхронный фильтр для сообщений, ожидающих вопрос
+# ---------------------------------------------------------------------
+class WaitingForQuestionFilter(BaseFilter):  # Наследуемся от BaseFilter (aiogram 3.x)
+    key = "waiting_for_question"
+
+    def __init__(self, waiting_for_question: str):
+        self.waiting_for_question = waiting_for_question
+
+    async def __call__(self, message: types.Message) -> bool:
+        state = await user_state.get_state(message.from_user.id)
+        return state is not None and state.get("state") == self.waiting_for_question
+
+dp.message.bind_filter(WaitingForQuestionFilter)
 
 # ---------------------------------------------------------------------
 # Работа с администраторами
@@ -141,26 +155,3 @@ async def learn_mode(message: types.Message):
         await message.answer("❌ Только администраторы могут обучать бота!")
         return
     await message.answer("📝 Введите вопрос и ответ для обучения.")
-
-# Предполагается, что функция get_db() определена в другом месте проекта
-# Например:
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        yield session
-
-# Остальная логика бота (обработка вопросов и т.п.) должна быть интегрирована здесь
-
-# ---------------------------------------------------------------------
-# Основная функция для запуска бота
-# ---------------------------------------------------------------------
-async def main():
-    # Создание таблиц в БД (если ещё не созданы)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    try:
-        await dp.start_polling()
-    finally:
-        await bot.session.close()
-
-if __name__ == "__main__":
-    asyncio.run(main())
