@@ -80,7 +80,7 @@ class WaitingForQuestionFilter(BaseFilter):  # Наследуемся от BaseF
         state = await user_state.get_state(message.from_user.id)
         return state is not None and state.get("state") == self.waiting_for_question
 
-dp.message.filter(WaitingForQuestionFilter())
+dp.message.filter(WaitingForQuestionFilter(waiting_for_question="waiting_for_question"))
 
 # ---------------------------------------------------------------------
 # Работа с администраторами
@@ -131,27 +131,25 @@ async def remove_admin(message: types.Message):
     except (IndexError, ValueError):
         await message.answer("❌ Используйте: /remove_admin <user_id>")
 
-@dp.message(Command("list_admins"))
-async def list_admins(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет прав на просмотр списка администраторов!")
-        return
-
-    async for session in get_db():
-        result = await session.execute(select(Admins))
-        admins = result.scalars().all()
-        if not admins:
-            await message.answer("👤 Список администраторов пуст!")
-            return
-        admin_list = "\n".join([f"👤 {admin.user_id}" for admin in admins])
-        await message.answer(f"📜 Список администраторов:\n{admin_list}")
+# ---------------------------------------------------------------------
+# Функция для получения сессии базы данных
+# ---------------------------------------------------------------------
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
 
 # ---------------------------------------------------------------------
-# Ограничение обучения только для администраторов
+# Основная функция для запуска бота
 # ---------------------------------------------------------------------
-@dp.message(Command("learn"))
-async def learn_mode(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ Только администраторы могут обучать бота!")
-        return
-    await message.answer("📝 Введите вопрос и ответ для обучения.")
+async def main():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        await dp.startup()
+        await dp.start_polling(bot)
+    finally:
+        await dp.shutdown()
+        await bot.session.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
