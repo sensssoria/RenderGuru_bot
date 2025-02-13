@@ -42,7 +42,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=True, future=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 redis_client = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
@@ -80,7 +80,7 @@ class WaitingForQuestionFilter(BaseFilter):  # Наследуемся от BaseF
         state = await user_state.get_state(message.from_user.id)
         return state is not None and state.get("state") == self.waiting_for_question
 
-dp.message.filter(WaitingForQuestionFilter(waiting_for_question="waiting_for_question"))
+dp.update.middleware(WaitingForQuestionFilter(waiting_for_question="waiting_for_question"))
 
 # ---------------------------------------------------------------------
 # Работа с администраторами
