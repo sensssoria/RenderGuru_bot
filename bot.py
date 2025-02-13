@@ -80,7 +80,7 @@ class WaitingForQuestionFilter(BaseFilter):  # Наследуемся от BaseF
         state = await user_state.get_state(message.from_user.id)
         return state is not None and state.get("state") == self.waiting_for_question
 
-dp.filters.bind(WaitingForQuestionFilter)
+dp.message.filter(WaitingForQuestionFilter())
 
 # ---------------------------------------------------------------------
 # Работа с администраторами
