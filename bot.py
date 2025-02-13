@@ -40,7 +40,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Инициализация бота, диспетчера, SQLAlchemy и Redis
 # ---------------------------------------------------------------------
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher
+dp = Dispatcher()
 
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -80,7 +80,7 @@ class WaitingForQuestionFilter(BaseFilter):  # Наследуемся от BaseF
         state = await user_state.get_state(message.from_user.id)
         return state is not None and state.get("state") == self.waiting_for_question
 
-dp.message.bind_filter(WaitingForQuestionFilter)
+dp.filters.bind(WaitingForQuestionFilter)
 
 # ---------------------------------------------------------------------
 # Работа с администраторами
