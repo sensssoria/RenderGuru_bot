@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 # Загрузка настроек из переменных окружения
 # ---------------------------------------------------------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_API_TOKEN_HERE")
+API_TOKEN = os.getenv("API_TOKEN", "YOUR_API_TOKEN_HERE")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/dbname")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # ---------------------------------------------------------------------
 # Инициализация бота, диспетчера, SQLAlchemy и Redis
 # ---------------------------------------------------------------------
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
 engine = create_async_engine(DATABASE_URL, echo=True)
