@@ -6,9 +6,10 @@ from datetime import datetime
 from typing import Optional, Dict, Any, AsyncGenerator, List
 
 import numpy as np
-
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, BaseFilter
+from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -27,24 +28,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Загрузка настроек из переменных окружения
+# Загрузка переменных окружения
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 
-# Проверка наличия необходимых переменных окружения
 if not all([API_TOKEN, DATABASE_URL, REDIS_URL]):
     raise ValueError("Missing required environment variables")
 
+# Инициализация Redis для FSM
+redis_storage = RedisStorage.from_url(REDIS_URL)
+
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher()  # Правильная инициализация для aiogram 3.x
+dp = Dispatcher(storage=redis_storage)
 
 # Инициализация баз данных
 engine = create_async_engine(DATABASE_URL, echo=True, future=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-# Инициализация Redis
+# Инициализация Redis клиента
 redis_client = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 
 # Определение базы данных
@@ -72,11 +75,11 @@ class WaitingForQuestionFilter(BaseFilter):
     def __init__(self, waiting_for_question: str):
         self.waiting_for_question = waiting_for_question
 
-    async def __call__(self, message: types.Message) -> bool:
-        state = await user_state.get_state(message.from_user.id)
-        return state is not None and state.get("state") == self.waiting_for_question
+    async def __call__(self, message: types.Message, state: FSMContext) -> bool:
+        current_state = await state.get_state()
+        return current_state == self.waiting_for_question
 
-# Регистрация middleware
+# Регистрация фильтра как middleware
 dp.message.middleware(WaitingForQuestionFilter(waiting_for_question="waiting_for_question"))
 
 # Функция для получения сессии базы данных
@@ -90,50 +93,21 @@ async def is_admin(user_id: int) -> bool:
         result = await session.execute(select(Admins).where(Admins.user_id == user_id))
         return bool(result.scalar_one_or_none())
 
-@dp.message(Command("add_admin"))
-async def add_admin(message: types.Message):
+# Команда /list_admins
+@dp.message(Command("list_admins"))
+async def list_admins(message: types.Message):
     if not await is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет прав на добавление администраторов!")
+        await message.answer("❌ У вас нет прав на просмотр списка администраторов!")
         return
 
-    try:
-        new_admin_id = int(message.text.split()[1])
-        async with AsyncSessionLocal() as session:
-            existing_admin = await session.execute(
-                select(Admins).where(Admins.user_id == new_admin_id)
-            )
-            if existing_admin.scalar_one_or_none():
-                await message.answer("✅ Этот пользователь уже администратор!")
-                return
-
-            new_admin = Admins(user_id=new_admin_id)
-            session.add(new_admin)
-            await session.commit()
-        await message.answer(f"✅ Пользователь {new_admin_id} добавлен в администраторы!")
-    except (IndexError, ValueError):
-        await message.answer("❌ Используйте: /add_admin <user_id>")
-
-@dp.message(Command("remove_admin"))
-async def remove_admin(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет прав на удаление администраторов!")
-        return
-
-    try:
-        remove_admin_id = int(message.text.split()[1])
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Admins).where(Admins.user_id == remove_admin_id)
-            )
-            admin = result.scalar_one_or_none()
-            if not admin:
-                await message.answer("❌ Этот пользователь не является администратором!")
-                return
-            await session.delete(admin)
-            await session.commit()
-        await message.answer(f"✅ Пользователь {remove_admin_id} удалён из администраторов!")
-    except (IndexError, ValueError):
-        await message.answer("❌ Используйте: /remove_admin <user_id>")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Admins))
+        admins = result.scalars().all()
+        if not admins:
+            await message.answer("👤 Список администраторов пуст!")
+            return
+        admin_list = "\n".join([f"👤 {admin.user_id}" for admin in admins])
+        await message.answer(f"📜 Список администраторов:\n{admin_list}")
 
 # Основная функция запуска бота
 async def main():
@@ -141,11 +115,22 @@ async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    # Запуск бота
     try:
+        # Запуск бота
+        logger.info("Starting bot...")
+        await dp.startup()
         await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Error occurred: {e}")
+        raise
     finally:
+        # Корректное закрытие соединений
+        await dp.shutdown()
+        await dp.storage.close()
         await bot.session.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped!")
