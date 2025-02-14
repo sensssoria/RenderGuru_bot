@@ -9,11 +9,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, Text, DateTime, func, select
 from redis import asyncio as aioredis
 
-# ✅ Настройка логирования
+# ✅ Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Загрузка переменных окружения
+# ✅ Переменные окружения
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")
@@ -25,7 +25,7 @@ if not all([API_TOKEN, DATABASE_URL, REDIS_URL]):
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# ✅ Инициализация Redis для FSM
+# ✅ Redis
 redis_client = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 
 # ✅ Главное меню
@@ -37,105 +37,74 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ✅ Подключение к БД
+# ✅ База данных
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
-# ✅ Модель таблицы администраторов
+# ✅ Таблица администраторов
 class Admins(Base):
     __tablename__ = "admins"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, unique=True, nullable=False)
     added_at = Column(DateTime, server_default=func.now())
 
-# ✅ Проверка, является ли пользователь админом
+# ✅ Проверка на админа
 async def is_admin(user_id: int) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Admins).where(Admins.user_id == user_id))
         return bool(result.scalar_one_or_none())
 
-# ✅ Команда /start
+# ✅ /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer("👋 Привет! Я RenderGuru Bot.", reply_markup=main_menu)
 
-# ✅ Команда /list_admins
+# ✅ Обработчик кнопок
+@dp.message()
+async def handle_buttons(message: Message):
+    text = message.text.lower().strip()
+    
+    if text == "спросить":
+        await message.answer("🔍 Введите вопрос, и я попробую найти ответ!")
+    elif text == "учить":
+        await message.answer("✏ Введите вопрос, который хотите добавить:")
+    elif text == "помощь":
+        await message.answer("ℹ Доступные команды:\n/start – Запуск бота\n/list_admins – Список админов\n/learning – Обучение бота")
+    elif text == "администрирование":
+        if await is_admin(message.from_user.id):
+            await message.answer("⚙ Добро пожаловать в админ-панель!\nДоступные команды:\n/add_admin\n/remove_admin\n/list_admins")
+        else:
+            await message.answer("❌ У вас нет прав доступа к администрированию.")
+    else:
+        await message.answer("❓ Я не понимаю этот запрос. Попробуйте выбрать команду из меню.")
+
+# ✅ /list_admins
 @dp.message(Command("list_admins"))
 async def list_admins(message: Message):
     if not await is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет прав на просмотр списка администраторов!")
+        await message.answer("❌ У вас нет прав!")
         return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Admins))
         admins = result.scalars().all()
-        if not admins:
-            await message.answer("👤 Список администраторов пуст!")
-            return
-        admin_list = "\n".join([f"👤 {admin.user_id}" for admin in admins])
+        admin_list = "\n".join([f"👤 {admin.user_id}" for admin in admins]) if admins else "👤 Администраторов пока нет."
         await message.answer(f"📜 Список администраторов:\n{admin_list}")
 
-# ✅ Команда /add_admin
-@dp.message(Command("add_admin"))
-async def add_admin_cmd(message: Message):
-    if not await is_admin(message.from_user.id):
-        return await message.answer("❌ У вас нет прав!")
-
-    user_id = message.reply_to_message.from_user.id if message.reply_to_message else None
-    if not user_id:
-        return await message.answer("Ответьте на сообщение пользователя, чтобы сделать его админом.")
-
-    async with AsyncSessionLocal() as session:
-        session.add(Admins(user_id=user_id))
-        await session.commit()
-
-    await message.answer(f"✅ Пользователь {user_id} теперь администратор.")
-
-# ✅ Команда /remove_admin
-@dp.message(Command("remove_admin"))
-async def remove_admin_cmd(message: Message):
-    if not await is_admin(message.from_user.id):
-        return await message.answer("❌ У вас нет прав!")
-
-    user_id = message.reply_to_message.from_user.id if message.reply_to_message else None
-    if not user_id:
-        return await message.answer("Ответьте на сообщение пользователя, чтобы удалить его из администраторов.")
-
-    async with AsyncSessionLocal() as session:
-        await session.execute(select(Admins).where(Admins.user_id == user_id).delete())
-        await session.commit()
-
-    await message.answer(f"❌ Пользователь {user_id} удалён из администраторов.")
-
-# ✅ Команда /learning для добавления знаний
+# ✅ /learning
 @dp.message(Command("learning"))
 async def cmd_learning(message: Message):
     await message.answer("✏ Введите вопрос, который хотите добавить:")
 
-@dp.message(lambda message: message.reply_to_message and message.reply_to_message.text.startswith("✏ Введите вопрос"))
-async def process_question(message: Message):
-    await message.answer("💬 Теперь введите ответ на этот вопрос:")
+# ✅ Подключение обработчиков
+def register_handlers():
+    dp.message.register(cmd_start, Command("start"))
+    dp.message.register(list_admins, Command("list_admins"))
+    dp.message.register(cmd_learning, Command("learning"))
+    dp.message.register(handle_buttons)
 
-@dp.message(lambda message: message.reply_to_message and message.reply_to_message.text.startswith("💬 Теперь введите ответ"))
-async def process_answer(message: Message):
-    question = message.reply_to_message.reply_to_message.text
-    answer = message.text
-
-    async with AsyncSessionLocal() as session:
-        session.add(KnowledgeBase(question=question, answer=answer, created_by=message.from_user.id))
-        await session.commit()
-
-    await message.answer("✅ Вопрос и ответ сохранены!")
-
-# ✅ Подключение к базе знаний
-class KnowledgeBase(Base):
-    __tablename__ = "knowledge_base"
-    id = Column(Integer, primary_key=True, index=True)
-    question = Column(Text, nullable=False)
-    answer = Column(Text, nullable=False)
-    created_by = Column(Integer, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
+register_handlers()
 
 # ✅ Запуск бота
 async def main():
