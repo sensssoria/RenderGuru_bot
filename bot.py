@@ -78,6 +78,7 @@ async def cmd_start(message: Message):
 @dp.message()
 async def handle_buttons(message: Message):
     text = message.text.lower().strip()
+    logger.info(f"Обработка кнопки: {text}")
     if text == "спросить":
         await message.answer("🔍 Введите ваш вопрос, и я попробую найти ответ!")
     elif text == "учить":
@@ -93,8 +94,10 @@ async def handle_buttons(message: Message):
         await message.answer("❓ Я не понимаю этот запрос. Попробуйте выбрать команду из меню.")
 
 # ✅ Обработка вопроса: Поиск в БД, затем OpenAI или заглушка
+@dp.message()
 async def handle_question(message: Message):
     question = message.text.strip()
+    logger.info(f"Обработка вопроса: {question}")
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(KnowledgeBase).where(KnowledgeBase.question == question))
         answer = result.scalar_one_or_none()
@@ -106,18 +109,6 @@ async def handle_question(message: Message):
     if not OPENAI_API_KEY:
         await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
         return
-    try:
-        openai.api_key = OPENAI_API_KEY
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "system", "content": "Ты помощник по 3D-визуализации."},
-                      {"role": "user", "content": question}]
-        )
-        answer = response.choices[0].message.content.strip()
-        await message.answer(f"🤖 Ответ: {answer}")
-    except Exception as e:
-        logger.error(f"Ошибка при запросе к OpenAI: {e}")
-        await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
 
 # ✅ Подключение обработчиков
 def register_handlers():
