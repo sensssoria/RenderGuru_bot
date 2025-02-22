@@ -1,10 +1,9 @@
-import os 
+import os
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.exceptions import TelegramNetworkError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, Text, DateTime, func, select
@@ -18,10 +17,10 @@ logger = logging.getLogger(__name__)
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # Добавлена переменная для суперадмина
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 if not all([API_TOKEN, DATABASE_URL, REDIS_URL, OWNER_ID]):
-    raise ValueError("❌ Ошибка: Не заданы все обязательные переменные окружения.")
+    raise ValueError("❌ Ошибка: Не заданы переменные окружения API_TOKEN, DATABASE_URL, REDIS_URL или OWNER_ID.")
 
 # ✅ Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
@@ -54,8 +53,7 @@ class Admins(Base):
 # ✅ Проверка на админа
 async def is_admin(user_id: int) -> bool:
     if user_id == OWNER_ID:
-        return True  # ✅ Супер-админ всегда админ!
-
+        return True
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Admins).where(Admins.user_id == user_id))
         return bool(result.scalar_one_or_none())
@@ -84,23 +82,9 @@ async def handle_buttons(message: Message):
     else:
         await message.answer("❓ Я не понимаю этот запрос. Попробуйте выбрать команду из меню.")
 
-# ✅ /list_admins
-@dp.message(Command("list_admins"))
-async def list_admins(message: Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет прав!")
-        return
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Admins))
-        admins = result.scalars().all()
-        admin_list = "\n".join([f"👤 {admin.user_id}" for admin in admins]) if admins else "👤 Администраторов пока нет."
-        await message.answer(f"📜 Список администраторов:\n{admin_list}")
-
 # ✅ Подключение обработчиков
 def register_handlers():
     dp.message.register(cmd_start, Command("start"))
-    dp.message.register(list_admins, Command("list_admins"))
     dp.message.register(handle_buttons)
 
 register_handlers()
@@ -113,9 +97,8 @@ async def main():
     try:
         logger.info("🚀 Запуск бота...")
         await dp.start_polling(bot)
-    except TelegramNetworkError as e:
-        logger.error(f"❌ Ошибка сети Telegram: {e}. Переподключение через 5 секунд...")
-        await asyncio.sleep(5)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запуске бота: {e}")
     finally:
         logger.info("🛑 Остановка бота. Закрытие сессии...")
         await bot.session.close()
