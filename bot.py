@@ -72,6 +72,7 @@ async def is_admin(user_id: int) -> bool:
 # ✅ /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    logger.info(f"Команда /start от пользователя: {message.from_user.id}")
     await message.answer("👋 Привет! Я RenderGuru Bot.", reply_markup=main_menu)
 
 # ✅ Обработчик кнопок
@@ -103,10 +104,12 @@ async def handle_question(message: Message):
         answer = result.scalar_one_or_none()
 
     if answer:
+        logger.info(f"Ответ найден в базе данных: {answer.answer}")
         await message.answer(f"🤖 Ответ из базы данных: {answer.answer}")
         return
 
     if not OPENAI_API_KEY:
+        logger.info("OpenAI API недоступен. Включение заглушки.")
         await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
         return
 
