@@ -75,11 +75,11 @@ async def cmd_start(message: Message):
     logger.info(f"Команда /start от пользователя: {message.from_user.id}")
     await message.answer("👋 Привет! Я RenderGuru Bot.", reply_markup=main_menu)
 
-# ✅ Обработчик кнопок
+# ✅ Обработчик кнопок и команд
 @dp.message()
 async def handle_buttons(message: Message):
     text = message.text.lower().strip()
-    logger.info(f"Обработка кнопки: {text}")
+    logger.info(f"Обработка сообщения: {text}")
     if text == "спросить":
         await message.answer("🔍 Введите ваш вопрос, и я попробую найти ответ!")
     elif text == "учить":
@@ -91,33 +91,17 @@ async def handle_buttons(message: Message):
             await message.answer("⚙ Добро пожаловать в админ-панель!\nДоступные команды:\n/add_admin\n/remove_admin\n/list_admins")
         else:
             await message.answer("❌ У вас нет прав доступа к администрированию.")
+    elif text.startswith("/"):
+        logger.info(f"Обработка команды: {text}")
+        await message.answer(f"❓ Команда '{text}' не распознана. Попробуйте другую.")
     else:
+        logger.info(f"Неизвестная команда: {text}")
         await message.answer("❓ Я не понимаю этот запрос. Попробуйте выбрать команду из меню.")
-
-# ✅ Обработка вопроса: Поиск в БД, затем OpenAI или заглушка
-@dp.message()
-async def handle_question(message: Message):
-    question = message.text.strip()
-    logger.info(f"Обработка вопроса: {question}")
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(KnowledgeBase).where(KnowledgeBase.question == question))
-        answer = result.scalar_one_or_none()
-
-    if answer:
-        logger.info(f"Ответ найден в базе данных: {answer.answer}")
-        await message.answer(f"🤖 Ответ из базы данных: {answer.answer}")
-        return
-
-    if not OPENAI_API_KEY:
-        logger.info("OpenAI API недоступен. Включение заглушки.")
-        await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
-        return
 
 # ✅ Подключение обработчиков
 def register_handlers():
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(handle_buttons)
-    dp.message.register(handle_question)
 
 register_handlers()
 
