@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, Text, DateTime, func, select
 from redis import asyncio as aioredis
+import openai
 
 # ✅ Логирование
 logging.basicConfig(level=logging.INFO)
@@ -18,9 +19,10 @@ API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 if not all([API_TOKEN, DATABASE_URL, REDIS_URL, OWNER_ID]):
-    raise ValueError("❌ Ошибка: Не заданы переменные окружения API_TOKEN, DATABASE_URL, REDIS_URL или OWNER_ID.")
+    raise ValueError("❌ Ошибка: Не заданы все необходимые переменные окружения.")
 
 # ✅ Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
@@ -50,6 +52,15 @@ class Admins(Base):
     user_id = Column(Integer, unique=True, nullable=False)
     added_at = Column(DateTime, server_default=func.now())
 
+# ✅ Таблица базы знаний
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_base"
+    id = Column(Integer, primary_key=True, index=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
 # ✅ Проверка на админа
 async def is_admin(user_id: int) -> bool:
     if user_id == OWNER_ID:
@@ -67,9 +78,8 @@ async def cmd_start(message: Message):
 @dp.message()
 async def handle_buttons(message: Message):
     text = message.text.lower().strip()
-    
     if text == "спросить":
-        await message.answer("🔍 Введите вопрос, и я попробую найти ответ!")
+        await message.answer("🔍 Введите ваш вопрос, и я попробую найти ответ!")
     elif text == "учить":
         await message.answer("✏ Введите вопрос, который хотите добавить:")
     elif text == "помощь":
@@ -82,10 +92,38 @@ async def handle_buttons(message: Message):
     else:
         await message.answer("❓ Я не понимаю этот запрос. Попробуйте выбрать команду из меню.")
 
+# ✅ Обработка вопроса: Поиск в БД, затем OpenAI или заглушка
+async def handle_question(message: Message):
+    question = message.text.strip()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(KnowledgeBase).where(KnowledgeBase.question == question))
+        answer = result.scalar_one_or_none()
+
+    if answer:
+        await message.answer(f"🤖 Ответ из базы данных: {answer.answer}")
+        return
+
+    if not OPENAI_API_KEY:
+        await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
+        return
+    try:
+        openai.api_key = OPENAI_API_KEY
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": "Ты помощник по 3D-визуализации."},
+                      {"role": "user", "content": question}]
+        )
+        answer = response.choices[0].message.content.strip()
+        await message.answer(f"🤖 Ответ: {answer}")
+    except Exception as e:
+        logger.error(f"Ошибка при запросе к OpenAI: {e}")
+        await message.answer("🤖 Извините, сейчас я не могу получить ответ от OpenAI. Попробуйте позже!")
+
 # ✅ Подключение обработчиков
 def register_handlers():
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(handle_buttons)
+    dp.message.register(handle_question)
 
 register_handlers()
 
@@ -93,7 +131,6 @@ register_handlers()
 async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
     try:
         logger.info("🚀 Запуск бота...")
         await dp.start_polling(bot)
